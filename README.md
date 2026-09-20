@@ -2,7 +2,7 @@
 
 Convert any video into an **ASCII-art live wallpaper** tinted to your current Omarchy theme.
 
-![preview](aigis_p3_yellow_ascii.mp4)
+![aigis_p3_yellow.mp4 converted to ASCII](preview.gif)
 
 Found a gorgeous video wallpaper online that clashes with your colorscheme? This transcodes it into a grid of monospace glyphs where every color is snapped to your theme's `colors.toml` so it always matches.
 
