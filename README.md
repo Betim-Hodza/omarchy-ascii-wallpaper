@@ -61,6 +61,15 @@ Multiprocessed; roughly realtime-ish on a modern CPU.
 No Python packages needed — just `ffmpeg` and `imagemagick`, both already on a
 stock Omarchy install.
 
+## Uninstall
+
+```
+omarchy plugin remove betim.ascii-wallpaper
+```
+
+Disabling or removing the plugin unwires its menu entry automatically. Already-
+converted `-ascii.mp4` files are plain videos and are left in place.
+
 ## Notes
 
 - Theme colors are baked into the output video. After switching themes, re-run
