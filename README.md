@@ -2,13 +2,12 @@
 
 Convert any video into an **ASCII-art live wallpaper** tinted to your current Omarchy theme.
 
-![preview](preview.png)
+![preview](aigis_p3_yellow_ascii.mp4)
 
-Found a gorgeous video wallpaper online that clashes with your colorscheme? This
-transcodes it into a grid of monospace glyphs where every color is snapped to
-your theme's `colors.toml` — so it always matches.
+Found a gorgeous video wallpaper online that clashes with your colorscheme? This transcodes it into a grid of monospace glyphs where every color is snapped to your theme's `colors.toml` so it always matches.
 
-Works great with [tenzin.live-wallpaper](https://github.com/tenzirrr) or any
+Works great with [tenzin.live-wallpaper](https://github.com/tenzirrr) or any (what I use)
+
 video-wallpaper plugin — the output is a plain `.mp4` in your theme's
 backgrounds folder, so it shows up in the normal background picker.
 
@@ -58,8 +57,7 @@ true average), a small Python script maps cell luminance to a glyph ramp and
 blits pre-tinted JetBrainsMono Nerd Font tiles, and libx264 encodes the result.
 Multiprocessed; roughly realtime-ish on a modern CPU.
 
-No Python packages needed — just `ffmpeg` and `imagemagick`, both already on a
-stock Omarchy install.
+No Python packages needed, just `ffmpeg` and `imagemagick`, both already on a stock Omarchy install.
 
 ## Uninstall
 
