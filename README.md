@@ -6,7 +6,7 @@ Convert any video into an **ASCII-art live wallpaper** tinted to your current Om
 
 Found a gorgeous video wallpaper online that clashes with your colorscheme? This transcodes it into a grid of monospace glyphs where every color is snapped to your theme's `colors.toml` so it always matches.
 
-Works great with [tenzin.live-wallpaper](https://github.com/tenzirrr) or any (what I use)
+Works great with [tenzin.live-wallpaper](https://plugins.omarchy.org/plugin.html?id=tenzin.live-wallpaper) (what I use)
 
 video-wallpaper plugin — the output is a plain `.mp4` in your theme's
 backgrounds folder, so it shows up in the normal background picker.
