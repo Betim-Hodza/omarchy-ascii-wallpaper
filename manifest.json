@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "betim.ascii-wallpaper",
+  "name": "ASCII Wallpaper",
+  "version": "1.0.0",
+  "author": "betim",
+  "description": "Convert any video into an ASCII-art wallpaper tinted to your current Omarchy theme. Adds 'Style > ASCII Wallpaper' to the menu.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}

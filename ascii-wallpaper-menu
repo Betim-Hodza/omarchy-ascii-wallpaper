@@ -1,0 +1,72 @@
+#!/bin/bash
+# Interactive picker for ascii-wallpaper: choose a video, a color mode, convert.
+# Invoked from the Omarchy menu (Style > ASCII Wallpaper) inside
+# omarchy-launch-floating-terminal-with-presentation.
+
+set -uo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CONVERTER="$SCRIPT_DIR/ascii-wallpaper"
+[[ -x $CONVERTER ]] || CONVERTER=ascii-wallpaper  # fall back to PATH
+
+theme_name=$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)
+bg_root="$HOME/.config/omarchy/backgrounds"
+start_dir="$bg_root/${theme_name:-}"
+[[ -d $start_dir ]] || start_dir="$bg_root"
+[[ -d $start_dir ]] || start_dir="$HOME"
+
+# Flat list of every video under the theme's backgrounds dir (relative paths)
+mapfile -t videos < <(
+  find "$start_dir" -maxdepth 3 -type f \
+    \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.webm' \
+       -o -iname '*.mov' -o -iname '*.m4v' \) -printf '%P\n' 2>/dev/null | sort
+)
+
+browse="[ browse files… ]"
+if ((${#videos[@]})); then
+  pick=$(printf '%s\n' "$browse" "${videos[@]}" | \
+    gum filter --height 20 --placeholder "Video to ASCII-ify…")
+else
+  pick="$browse"
+fi
+[[ -z ${pick:-} ]] && exit 130  # cancelled: skip the done-prompt
+
+if [[ $pick == "$browse" ]]; then
+  cd "$start_dir" || exit 1
+  rel=$(gum file --height 20 .)
+  [[ -z ${rel:-} ]] && exit 130
+  video=$(realpath "$rel" 2>/dev/null || printf '%s' "$rel")
+else
+  video="$start_dir/$pick"
+fi
+
+if [[ ! -f $video ]]; then
+  echo "Not a file: $video" >&2
+  exit 1
+fi
+case "${video,,}" in
+  *.mp4|*.mkv|*.webm|*.mov|*.m4v) ;;
+  *)
+    echo "Not a video file: $video" >&2
+    exit 1
+    ;;
+esac
+
+mode=$(gum choose --header "Color mode" --height 8 \
+  "themed  (snap to ${theme_name:-theme} palette)" \
+  "mono    (theme foreground on background)" \
+  "source  (keep original colors)")
+[[ -z ${mode:-} ]] && exit 130
+mode=${mode%% *}
+
+echo
+echo "Converting: $video"
+echo "Mode: $mode"
+echo
+
+if "$CONVERTER" --mode "$mode" "$video"; then
+  omarchy-notification-send "ASCII wallpaper ready" -t 3000
+else
+  omarchy-notification-send "ASCII wallpaper conversion failed" -t 4000
+  exit 1
+fi
