@@ -36,10 +36,9 @@ Then enable `betim.ascii-wallpaper` in **Setup > Plugins** (or `omarchy plugin e
 ascii-wallpaper <video> [-o out.mp4]
   --mode themed|source|mono   themed snaps every cell to your theme palette (default)
   --ramp classic|detailed|blocks|digits|binary|" <chars>"
-  --rows N | --cell PX        grid density
-  --fps N --width PX --crf N  encode tuning
-  --seek S --duration S       trim
-  --preview out.png --seek 5  render one frame to PNG for a quick check
+  --rows N                    grid density
+  --crf N --preset NAME       encode tuning
+  --preview out.png           render the first frame to PNG for a quick check
 ```
 
 ### Color modes

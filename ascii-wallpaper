@@ -12,12 +12,11 @@ Examples:
   ascii-wallpaper clip.mp4 --mode mono        # theme fg on bg only
   ascii-wallpaper clip.mp4 --mode source      # keep original colors
   ascii-wallpaper clip.mp4 --ramp blocks --rows 60
-  ascii-wallpaper clip.mp4 --preview out.png --seek 5
+  ascii-wallpaper clip.mp4 --preview out.png
 """
 
 import argparse
 import json
-import math
 import multiprocessing as mp
 import os
 import subprocess
@@ -28,6 +27,9 @@ THEME_COLORS = os.path.expanduser(
     "~/.local/state/omarchy/current/theme/colors.toml"
 )
 DEFAULT_FONT = "/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"
+
+# stills and oddly-muxed streams report r_frame_rate as 0/0 or 0/1
+FALLBACK_FPS = 30.0
 
 RAMPS = {
     # light -> dark (increasing ink density)
@@ -65,7 +67,9 @@ def probe(path):
         capture_output=True, text=True, check=True).stdout
     st = json.loads(out)["streams"][0]
     num, den = st["r_frame_rate"].split("/")
-    fps = float(num) / float(den) if float(den) else 30.0
+    fps = float(num) / float(den) if float(den) else 0.0
+    if fps <= 0:
+        fps = FALLBACK_FPS
     return int(st["width"]), int(st["height"]), fps, float(st.get("duration") or 0)
 
 
@@ -77,17 +81,25 @@ def load_theme():
         return {}
 
 
-def hex2rgb(h):
+RGB = tuple[int, int, int]
+
+
+def hex2rgb(h: str) -> RGB:
     h = h.lstrip("#")
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def build_palette(mode, theme, bg_hex):
+def build_palette(mode: str, theme: dict, bg_hex: str) -> tuple[list[RGB], RGB]:
     """Return (palette list of rgb, bg rgb)."""
-    bg = hex2rgb(bg_hex) if bg_hex else hex2rgb(theme.get("background", "#000000"))
+    if bg_hex:
+        bg = hex2rgb(bg_hex)
+    else:
+        bg = hex2rgb(theme.get("background", "#000000"))
+
     if mode == "mono":
         fg = hex2rgb(theme.get("foreground", "#ffffff"))
         return [fg], bg
+
     if mode == "themed":
         pal = []
         for k in PALETTE_KEYS:
@@ -98,13 +110,12 @@ def build_palette(mode, theme, bg_hex):
         if not pal:  # no theme found -> grayscale
             pal = [(v, v, v) for v in range(64, 256, 24)]
         return pal, bg
+
     # source mode: uniform 6x6x6 RGB cube (216 colors); lut is a direct
-    # quantizer (index = r6*36 + g6*6 + b6), no nearest-color search needed
-    pal = []
-    for r6 in range(6):
-        for g6 in range(6):
-            for b6 in range(6):
-                pal.append((r6 * 51, g6 * 51, b6 * 51))
+    # quantizer (index = r6*36 + g6*6 + b6), no nearest-color search needed.
+    pal = [(r6 * 51, g6 * 51, b6 * 51)
+           for r6 in range(6) for g6 in range(6) for b6 in range(6)]
+
     return pal, bg
 
 
@@ -121,10 +132,12 @@ def build_lut(palette, source_mode):
                     lut[i] = r6 * 36 + g6 * 6 + b5 * 6 // 32
                     i += 1
         return bytes(lut)
+
     lut = bytearray(32768)
     pal = palette
     n = len(pal)
     i = 0
+
     for r5 in range(32):
         r = r5 * 255 // 31
         for g5 in range(32):
@@ -139,6 +152,7 @@ def build_lut(palette, source_mode):
                         bestd, best = d, j
                 lut[i] = best
                 i += 1
+
     return bytes(lut)
 
 
@@ -167,6 +181,7 @@ def tint_tiles(ink_tiles, palette, bg, cw, ch):
     cw3 = cw * 3
     bgr, bgg, bgb = bg
     all_tiles = []
+
     for (fr, fg, fb) in palette:
         dr, dg, db = fr - bgr, fg - bgg, fb - bgb
         # 256-entry lookup: ink value -> (r,g,b)
@@ -190,24 +205,24 @@ def tint_tiles(ink_tiles, palette, bg, cw, ch):
 _W = {}
 
 
-def _init_worker(tiles, lut, nramp, cols, rows, cw, ch, out_stride):
-    _W.update(tiles=tiles, lut=lut, nramp=nramp, cols=cols, rows=rows,
-              cw=cw, ch=ch, stride=out_stride)
+def _init_worker(tiles, lut, nramp, cols, rows, ch):
+    _W.update(tiles=tiles, lut=lut, nramp=nramp, cols=cols, rows=rows, ch=ch)
 
 
 def render_frame(cell_frame):
     tiles = _W["tiles"]
     lut = _W["lut"]
     nramp = _W["nramp"]
-    cols, rows = _W["cols"], _W["rows"]
-    cw, ch, stride = _W["cw"], _W["ch"], _W["stride"]
-    cw3 = cw * 3
+    cols, rows, ch = _W["cols"], _W["rows"], _W["ch"]
     inv = (nramp - 1) / 255.0
-    out = bytearray(rows * ch * stride)
+    out = []
+
     for cy in range(rows):
         cell_row = cell_frame[cy * cols * 3:(cy + 1) * cols * 3]
-        band = cy * ch * stride
+        # resolve this text row to its glyph tiles...
+        row_tiles = []
         for cx in range(cols):
+
             i = cx * 3
             r = cell_row[i]
             g = cell_row[i + 1]
@@ -215,75 +230,71 @@ def render_frame(cell_frame):
             luma = (r * 299 + g * 587 + b * 114) // 1000
             gidx = int(luma * inv)
             pidx = lut[((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)]
-            tile = tiles[pidx * nramp + gidx]
-            o = band + cx * cw3
-            for trow in tile:
-                out[o:o + cw3] = trow
-                o += stride
-    return bytes(out)
+            row_tiles.append(tiles[pidx * nramp + gidx])
+        # ...then emit it one pixel row at a time, each a single C-level join
+        for y in range(ch):
+            out.append(b"".join(t[y] for t in row_tiles))
+
+    return b"".join(out)
 
 
 def main():
     ap = argparse.ArgumentParser(description="Video -> ASCII-art wallpaper")
     ap.add_argument("input")
     ap.add_argument("-o", "--output")
-    ap.add_argument("--mode", choices=["themed", "source", "mono"],
-                    default="themed",
+    ap.add_argument("--mode", choices=["themed", "source", "mono"],default="themed",
                     help="color mode: themed = snap to omarchy palette (default), "
                          "source = keep video colors, mono = theme fg on bg")
-    ap.add_argument("--ramp", default="classic",
-                    help="ramp name (classic|detailed|blocks|digits|binary) "
-                         "or a literal char string, light->dark")
-    ap.add_argument("--rows", type=int, default=0,
-                    help="text rows (default: ~48 at output height)")
-    ap.add_argument("--cell", type=int, default=0,
-                    help="cell height in px (overrides --rows); width ~0.55x")
-    ap.add_argument("--pointsize", type=int, default=0,
-                    help="glyph pointsize (default ~0.8 * cell height)")
+    ap.add_argument("--ramp", default="classic",help="ramp name (classic|detailed|blocks|digits|binary) "
+                                                     "or a literal char string, light->dark")
+    ap.add_argument("--rows", type=int, default=0, help="text rows (default: ~48 at output height)")
+    ap.add_argument("--pointsize", type=int, default=0, help="glyph pointsize (default ~0.8 * cell height)")
     ap.add_argument("--font", default=DEFAULT_FONT)
-    ap.add_argument("--fps", type=float, default=30.0, help="max output fps")
-    ap.add_argument("--width", type=int, default=0,
-                    help="cap output width (keeps aspect)")
     ap.add_argument("--crf", type=int, default=20)
     ap.add_argument("--preset", default="medium")
     ap.add_argument("--bg", default="", help="background hex color override")
-    ap.add_argument("--seek", type=float, default=0.0, help="start offset (s)")
-    ap.add_argument("--duration", type=float, default=0.0, help="limit seconds")
-    ap.add_argument("--preview", metavar="PNG",
-                    help="render a single frame to PNG and exit (use with --seek)")
+    ap.add_argument("--preview", metavar="PNG",help="render the first frame to PNG and exit")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) - 2))
     args = ap.parse_args()
 
     if not os.path.isfile(args.input):
         die(f"no such file: {args.input}")
+
     ramp = RAMPS.get(args.ramp, args.ramp)
+
     if len(ramp) < 2:
         die("ramp needs at least 2 chars")
+
     if len(set(ramp)) != len(ramp):
         ramp = "".join(dict.fromkeys(ramp))
 
-    iw, ih, ifps, dur = probe(args.input)
-    fps = min(args.fps, ifps) if ifps > 0 else args.fps
+    input_width, input_height, fps, dur = probe(args.input)
 
-    # output geometry
-    ow = min(args.width, iw) if args.width else iw
-    ow -= ow % 2
-    oh = max(2, round(ih * ow / iw))
-    oh -= oh % 2
+    # output sizes for the video
+    # % 2 is to keep it even for yuv420
+    output_width = input_width - (input_width % 2)
 
-    cell_h = args.cell or max(14, round(oh / 48))
-    cell_w = max(6, round(cell_h * 0.55))
-    rows = args.rows or oh // cell_h
+    output_height = max(2, round(input_height * output_width / input_width))
+    output_height -= output_height % 2
+
     if args.rows:
-        cell_h = max(8, oh // args.rows)
-        cell_w = max(6, round(cell_h * 0.55))
-    cols = ow // cell_w
+        rows = args.rows
+        cell_h = max(8, output_height // rows)
+    else:
+        # ~48 rows so glyphs wont be small
+        cell_h = max(14, round(output_height / 48))
+        rows = output_height // cell_h
+
+    cell_w = max(6, round(cell_h * 0.55))
+    cols = output_width // cell_w
+
     # yuv420p requires even dimensions: drop a cell if the product is odd
     if (cols * cell_w) % 2:
         cols -= 1
     if (rows * cell_h) % 2:
         rows -= 1
-    ow, oh = cols * cell_w, rows * cell_h
+
+    output_width, output_height = cols * cell_w, rows * cell_h
     pointsize = args.pointsize or max(8, round(cell_h * 0.8))
 
     theme = load_theme()
@@ -292,7 +303,7 @@ def main():
 
     lut = build_lut(palette, source_mode)
 
-    print(f"[ascii-wallpaper] {iw}x{ih}@{ifps:.2f} -> {ow}x{oh}@{fps:.2f}  "
+    print(f"[ascii-wallpaper] {input_width}x{input_height} -> {output_width}x{output_height}@{fps:.2f}  "
           f"grid {cols}x{rows} cells {cell_w}x{cell_h}pt{pointsize}  "
           f"mode={args.mode} palette={len(palette)}", file=sys.stderr)
 
@@ -302,30 +313,24 @@ def main():
     del ink_tiles
 
     # decoder: cell-res rgb frames
-    dec = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error"]
-    if args.seek:
-        dec += ["-ss", str(args.seek)]
-    dec += ["-i", args.input]
-    if args.duration:
-        dec += ["-t", str(args.duration)]
-    dec += ["-vf", f"fps={fps:.4f},scale={cols}:{rows}:flags=area",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    dec = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+           "-i", args.input,
+           "-vf", f"fps={fps:.4f},scale={cols}:{rows}:flags=area",
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     decoder = subprocess.Popen(dec, stdout=subprocess.PIPE,
                                bufsize=cols * rows * 3 * 8)
 
     cell_bytes = cols * rows * 3
-    out_w, out_h = ow, oh
-    frame_bytes = out_w * out_h * 3
 
     if args.preview:
         raw = decoder.stdout.read(cell_bytes)
         decoder.kill()
         if len(raw) < cell_bytes:
-            die("could not decode a frame at --seek")
-        _init_worker(tiles, lut, len(ramp), cols, rows, cell_w, cell_h, out_w * 3)
+            die("could not decode a frame")
+        _init_worker(tiles, lut, len(ramp), cols, rows, cell_h)
         frame = render_frame(raw)
         run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{out_w}x{out_h}",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{output_width}x{output_height}",
              "-i", "-", args.preview], input=frame)
         print(args.preview)
         return
@@ -336,21 +341,17 @@ def main():
         out = base + "-ascii.mp4"
 
     enc = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{out_w}x{out_h}",
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{output_width}x{output_height}",
            "-r", f"{fps:.4f}", "-i", "-",
            "-c:v", "libx264", "-preset", args.preset, "-crf", str(args.crf),
            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", out]
     encoder = subprocess.Popen(enc, stdin=subprocess.PIPE)
 
-    eff_dur = dur - args.seek if dur else 0
-    if args.duration:
-        eff_dur = min(eff_dur, args.duration) if eff_dur else args.duration
-    total = int(eff_dur * fps) if eff_dur else 0
+    total = int(dur * fps) if dur else 0
     n = 0
     try:
         with mp.Pool(args.jobs, initializer=_init_worker,
-                     initargs=(tiles, lut, len(ramp), cols, rows,
-                               cell_w, cell_h, out_w * 3)) as pool:
+                     initargs=(tiles, lut, len(ramp), cols, rows, cell_h)) as pool:
             def frames():
                 while True:
                     buf = decoder.stdout.read(cell_bytes)
@@ -371,6 +372,15 @@ def main():
         decoder.wait()
         encoder.stdin.close()
         encoder.wait()
+
+    # both children must have exited cleanly before we claim the file is good
+    if encoder.returncode:
+        die(f"encoder failed (exit {encoder.returncode}); {out} is incomplete")
+    if decoder.returncode:
+        die(f"decoder failed (exit {decoder.returncode})")
+    if not n:
+        die("no frames decoded")
+
     sys.stderr.write(f"\n{out}\n")
 
 
