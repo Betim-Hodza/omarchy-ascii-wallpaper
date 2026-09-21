@@ -57,13 +57,37 @@ PY
 
 unwire_menu() {
   [[ -f $menu_file ]] || return 0
-  python3 - "$menu_file" <<'PY'
+  python3 - "$menu_file" <<'PY' || return 1
 import sys, os
+
+ENTRY = '"style.asciiwallpaper"'
 
 path = sys.argv[1]
 with open(path) as f:
     lines = f.read().splitlines()
-out = [l for l in lines if '"style.asciiwallpaper"' not in l]
+
+# Only remove an entry we are certain we wrote: our own id, at the start of the
+# line, with balanced braces so the whole object lives on that one line. Any
+# other shape (reformatted, hand-edited, split across lines) is left alone --
+# a stale menu row is recoverable, a corrupted omarchy-menu.jsonc is not.
+out, unsafe = [], False
+for line in lines:
+    if ENTRY not in line:
+        out.append(line)
+        continue
+    stripped = line.strip()
+    if stripped.startswith("//"):  # a comment mentioning us; not ours to touch
+        out.append(line)
+    elif stripped.startswith(ENTRY) and stripped.count("{") == stripped.count("}"):
+        continue
+    else:
+        out.append(line)
+        unsafe = True
+
+if unsafe:
+    sys.exit(f"ascii-wallpaper: {ENTRY} in {path} is not a single-line entry; "
+             "leaving the file untouched (remove the entry by hand)")
+
 tmp = path + ".tmp"
 with open(tmp, "w") as f:
     f.write("\n".join(out) + "\n")

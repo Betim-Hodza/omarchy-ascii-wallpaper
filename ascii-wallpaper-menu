@@ -29,6 +29,7 @@ if ((${#videos[@]})); then
 else
   pick="$browse"
 fi
+
 [[ -z ${pick:-} ]] && exit 130  # cancelled: skip the done-prompt
 
 if [[ $pick == "$browse" ]]; then
@@ -44,6 +45,7 @@ if [[ ! -f $video ]]; then
   echo "Not a file: $video" >&2
   exit 1
 fi
+
 case "${video,,}" in
   *.mp4|*.mkv|*.webm|*.mov|*.m4v) ;;
   *)
